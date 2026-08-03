@@ -33,6 +33,7 @@ contains  !> Unit tests for PV calculations
     new_unittest("GFN-FF energy decomposition    ",test_gfnff_edecomp), &
     new_unittest("GFN-FF energy components       ",test_gfnff_components), &
     new_unittest("GFN-FF energy components ALPB  ",test_gfnff_components_alpb), &
+    new_unittest("GFN-FF EDA HB/XB matrices      ",test_gfnff_eda_hb_xb), &
     new_unittest("GFN-FF supermol singlepoint    ",test_gfnff_supermol) &
     ]
 !&>
@@ -487,6 +488,72 @@ contains  !> Unit tests for PV calculations
       call check(error,r%g_solv, g_solv_ref, thr=cthr)
     end associate
   end subroutine test_gfnff_components_alpb
+
+!========================================================================================!
+
+  subroutine test_gfnff_eda_hb_xb(error)
+    type(error_type),allocatable,intent(out) :: error
+    real(wp),parameter :: aatoau = 1.8897259886_wp
+    real(wp),parameter :: hb_ref = -7.1587691860860202e-6_wp
+    real(wp),parameter :: xb_ref = -6.6595631428262945e-3_wp
+    integer,parameter :: nwater = 6,nxbmol = 8
+    integer,parameter :: at_water(nwater) = [8,1,1,8,1,1]
+    integer,parameter :: at_xb(nxbmol) = [6,53,1,1,1,8,1,1]
+    real(wp),parameter :: xyz_water_ang(3,nwater) = reshape([ &
+    &  0.000000_wp,  0.000000_wp,  0.000000_wp, &
+    &  0.758602_wp,  0.000000_wp,  0.504284_wp, &
+    & -0.758602_wp,  0.000000_wp,  0.504284_wp, &
+    &  0.000000_wp,  0.000000_wp,  2.900000_wp, &
+    &  0.758602_wp,  0.000000_wp,  3.404284_wp, &
+    & -0.758602_wp,  0.000000_wp,  3.404284_wp], [3,nwater])
+    real(wp),parameter :: xyz_xb_ang(3,nxbmol) = reshape([ &
+    &  0.000000_wp,  0.000000_wp,  0.000000_wp, &
+    &  2.140000_wp,  0.000000_wp,  0.000000_wp, &
+    & -0.363333_wp,  1.027662_wp,  0.000000_wp, &
+    & -0.363333_wp, -0.513831_wp,  0.889981_wp, &
+    & -0.363333_wp, -0.513831_wp, -0.889981_wp, &
+    &  5.040000_wp,  0.000000_wp,  0.000000_wp, &
+    &  5.646000_wp,  0.759000_wp,  0.000000_wp, &
+    &  5.646000_wp, -0.759000_wp,  0.000000_wp], [3,nxbmol])
+    type(gfnff_data) :: calc
+    real(wp),allocatable :: gradient(:,:)
+    real(wp) :: energy
+    integer :: io
+
+    allocate(calc%userinput)
+    calc%userinput%fraglist = [1,1,1,2,2,2]
+    allocate(calc%userinput%fragcharges(2),source=0.0_wp)
+    calc%write_topo = .false.
+    calc%do_eda = .true.
+    allocate(gradient(3,nwater))
+    call calc%init(nwater,at_water,xyz_water_ang*aatoau,ichrg=0,printlevel=0,iostat=io)
+    call check(error,io,0); if (allocated(error)) return
+    call calc%singlepoint(nwater,at_water,xyz_water_ang*aatoau,energy,gradient, &
+    &                     printlevel=0,iostat=io)
+    call check(error,io,0); if (allocated(error)) return
+    call check(error,calc%res%e_hb,hb_ref,thr=1.0e-11_wp); if (allocated(error)) return
+    call check(error,sum(calc%res%eda%hydrogen_bond),calc%res%e_hb,thr=1.0e-12_wp)
+    if (allocated(error)) return
+    call check(error,sum(calc%res%eda%halogen_bond),0.0_wp,thr=1.0e-14_wp)
+    if (allocated(error)) return
+
+    call calc%deallocate()
+    if (allocated(calc%userinput)) deallocate(calc%userinput)
+    deallocate(gradient)
+    allocate(calc%userinput)
+    calc%userinput%fraglist = [1,1,1,1,1,2,2,2]
+    allocate(calc%userinput%fragcharges(2),source=0.0_wp)
+    calc%write_topo = .false.
+    calc%do_eda = .true.
+    allocate(gradient(3,nxbmol))
+    call calc%init(nxbmol,at_xb,xyz_xb_ang*aatoau,ichrg=0,printlevel=0,iostat=io)
+    call check(error,io,0); if (allocated(error)) return
+    call calc%singlepoint(nxbmol,at_xb,xyz_xb_ang*aatoau,energy,gradient, &
+    &                     printlevel=0,iostat=io)
+    call check(error,io,0); if (allocated(error)) return
+    call check(error,calc%res%e_xb,xb_ref,thr=1.0e-11_wp); if (allocated(error)) return
+    call check(error,sum(calc%res%eda%halogen_bond),calc%res%e_xb,thr=1.0e-12_wp)
+  end subroutine test_gfnff_eda_hb_xb
 
 !========================================================================================!
 

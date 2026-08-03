@@ -39,3 +39,41 @@ add_custom_command(TARGET ${PROJECT_NAME}-exe
                    $<TARGET_FILE:${PROJECT_NAME}-exe>
                    ${CMAKE_BINARY_DIR}/$<TARGET_FILE_NAME:${PROJECT_NAME}-exe>)
 
+set(edaapp
+  "${dir}/eda_input.f90"
+  "${dir}/eda_main.F90"
+)
+
+add_executable(
+  "${PROJECT_NAME}-eda-exe"
+  "${edaapp}"
+)
+set_target_properties(
+  "${PROJECT_NAME}-eda-exe"
+  PROPERTIES
+  OUTPUT_NAME "eda-gfnff"
+)
+target_compile_options(
+  "${PROJECT_NAME}-eda-exe"
+  PRIVATE
+  "$<$<Fortran_COMPILER_ID:GNU>:-fall-intrinsics>"
+)
+target_link_libraries(
+  "${PROJECT_NAME}-eda-exe"
+  PRIVATE
+  "${PROJECT_NAME}-lib"
+)
+
+install(
+  TARGETS
+  "${PROJECT_NAME}-eda-exe"
+  DESTINATION
+  "${CMAKE_INSTALL_BINDIR}"
+)
+
+add_custom_command(TARGET ${PROJECT_NAME}-eda-exe
+                   POST_BUILD
+                   COMMAND ${CMAKE_COMMAND} -E copy
+                   $<TARGET_FILE:${PROJECT_NAME}-eda-exe>
+                   ${CMAKE_BINARY_DIR}/$<TARGET_FILE_NAME:${PROJECT_NAME}-eda-exe>)
+

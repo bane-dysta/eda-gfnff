@@ -40,6 +40,7 @@ program gfnff_main_tester
   type(gfnff_timer) :: timer
 
   character(len=1028) :: inputfile
+  character(len=1028) :: atmp
   integer :: threads
   real(wp),parameter :: autoaa = 0.529177249_wp
 !========================================================================================!

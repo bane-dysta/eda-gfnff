@@ -42,6 +42,7 @@ module gfnff_interface
     integer  :: version = gffVersion%angewChem2020_2
     logical  :: update = .true.
     logical  :: write_topo = .true.
+    logical  :: do_eda = .false. !> compute optional molecular interfragment EDA matrices
     character(len=:),allocatable :: parametrisation
     character(len=:),allocatable :: solvent
     logical :: restart = .false.
@@ -148,7 +149,8 @@ contains  !> MODULE PROCEDURES START HERE
 ! ── call E+Grd ────────────────────────────────────────────────────────────────
     call gfnff_eg(mylevel,nat,at,xyz,dat%cell,sigma_loc,dat%ichrg,gradient,energy, &
     &            dat%res,dat%param,dat%topo,dat%neigh,dat%nlist,efield_loc,        &
-    &            dat%solvation,dat%update,dat%version,dat%accuracy,printunit=myunit)
+    &            dat%solvation,dat%update,dat%version,dat%accuracy,printunit=myunit, &
+    &            do_eda=dat%do_eda)
 
 ! ── transfer optional outputs ─────────────────────────────────────────────────
     if (present(sigma)) sigma = sigma_loc
@@ -359,6 +361,36 @@ contains  !> MODULE PROCEDURES START HERE
       end if
     end if
 
+!> Install an exact user-defined fragment partition and its integer net
+!> charges. This is deliberately done after topo%zero and before gfnff_setup:
+!> gfnff_input will preserve a complete, charge-consistent assignment, while
+!> gfnff_ini will skip its distance-based fragment reconstruction.
+    if (allocated(dat%userinput)) then
+      if (allocated(dat%userinput%fraglist) .and. &
+          allocated(dat%userinput%fragcharges)) then
+        if (size(dat%userinput%fraglist) == nat .and. &
+            minval(dat%userinput%fraglist) == 1 .and. &
+            maxval(dat%userinput%fraglist) == size(dat%userinput%fragcharges) .and. &
+            all(dat%userinput%fraglist >= 1) .and. &
+            abs(sum(dat%userinput%fragcharges)-real(dat%ichrg,wp)) < 1.0e-8_wp) then
+          dat%topo%nfrag = size(dat%userinput%fragcharges)
+          allocate (dat%topo%fraglist(nat),source=dat%userinput%fraglist)
+          allocate (dat%topo%qfrag(nat),source=0.0_wp)
+          dat%topo%qfrag(1:dat%topo%nfrag) = dat%userinput%fragcharges
+          if (mylevel >= 2) then
+            write (myunit,'(10x,a,i0,a,100(1x,f7.2))') &
+            & 'using exact user fragment charges for ',dat%topo%nfrag, &
+            & ' fragments:',dat%topo%qfrag(1:dat%topo%nfrag)
+          end if
+        else
+          if (mylevel >= 1) write (myunit,'("**ERROR** ",a,1x,a)') &
+          & 'invalid user fragment labels or fragment charges',source
+          if (present(iostat)) iostat = -1
+          return
+        end if
+      end if
+    end if
+
 !> global accuracy factor similar to acc in xtb used in SCF
     dat%accuracy = 0.1_wp
     if (nat > 10000) then
@@ -448,6 +480,7 @@ contains  !> MODULE PROCEDURES START HERE
     self%version = 1
     self%update = .true.
     self%write_topo = .true.
+    self%do_eda = .false.
     if (allocated(self%solvent)) deallocate (self%solvent)
     if (allocated(self%gen)) deallocate (self%gen)
     if (allocated(self%param)) deallocate (self%param)

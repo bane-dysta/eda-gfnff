@@ -208,6 +208,7 @@ endif
 # ═══════════════════════════════════════════════════════════════════════════════
 srcs = []
 prog = []
+eda_prog = []
 subdir('src')
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -238,6 +239,13 @@ if get_option('build_exe')
   executable(
     'gfnff',
     sources      : prog,
+    dependencies : gfnff_dep,
+    install      : true,
+    link_language: 'fortran',
+  )
+  executable(
+    'eda-gfnff',
+    sources      : eda_prog,
     dependencies : gfnff_dep,
     install      : true,
     link_language: 'fortran',

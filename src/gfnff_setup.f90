@@ -168,8 +168,13 @@ contains   !> MODULE PROCEDURES START HERE
 !      ichrg = int(sum(topo%qfrag(1:nf)))
 !      topo%qfrag(nf+1:nat) = 9999
 !    else
-    topo%qfrag(1) = ichrg
-    topo%qfrag(2:nat) = 0
+    ! Preserve an exact user-supplied fragment-charge assignment installed by
+    ! gfnff_initialize. Otherwise retain the historical default.
+    if (.not.(topo%nfrag > 1 .and. size(topo%qfrag) >= topo%nfrag .and. &
+        abs(sum(topo%qfrag(1:topo%nfrag))-real(ichrg,wp)) < 1.0e-8_wp)) then
+      topo%qfrag(1) = ichrg
+      topo%qfrag(2:nat) = 0
+    end if
 !    end if
 
   end subroutine gfnff_input

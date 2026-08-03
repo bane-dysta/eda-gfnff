@@ -32,9 +32,30 @@ module gfnff_engrad_module
   use gfnff_math_wrapper
   implicit none
   private
-  public :: gfnff_eg,gfnff_results
+  public :: gfnff_eg,gfnff_results,gfnff_eda_results
 
 !&<
+  !> Interfragment EDA-GFNFF terms. Matrices are stored in the upper triangle:
+  !> element (i,j), i<j, is the interaction between fragments i and j.
+  type :: gfnff_eda_results
+    integer :: nfrag = 0
+    real(wp),allocatable :: electrostatic(:,:)
+    real(wp),allocatable :: repulsion(:,:)
+    real(wp),allocatable :: dispersion(:,:)
+    !> Native three-center GFN-FF hydrogen-bond correction by fragment pair.
+    real(wp),allocatable :: hydrogen_bond(:,:)
+    !> Native three-center GFN-FF halogen-bond correction by fragment pair.
+    real(wp),allocatable :: halogen_bond(:,:)
+    !> Multiwfn-style atomic contributions. A two-center interaction is split
+    !> equally between its two atoms. A three-center HB/XB correction is split
+    !> equally over the unique atoms participating in that correction.
+    real(wp),allocatable :: atom_electrostatic(:)
+    real(wp),allocatable :: atom_repulsion(:)
+    real(wp),allocatable :: atom_dispersion(:)
+    real(wp),allocatable :: atom_hydrogen_bond(:)
+    real(wp),allocatable :: atom_halogen_bond(:)
+  end type gfnff_eda_results
+
   !> results log
   type :: gfnff_results
     real(wp) :: e_total   = 0.0_wp
@@ -55,6 +76,7 @@ module gfnff_engrad_module
     real(wp) :: e_hb      = 0.0_wp
     real(wp) :: e_batm    = 0.0_wp
     real(wp) :: e_ext     = 0.0_wp
+    type(gfnff_eda_results) :: eda
   end type gfnff_results
 
   real(wp),private,parameter :: pi = 3.1415926535897932385_wp
@@ -94,7 +116,7 @@ contains  !> MODULE PROCEDURES START HERE
 !---------------------------------------------------
 
   subroutine gfnff_eg(printlevel,n,at,xyz,cell,sigma,ichrg,g,etot,res_gff, &
-        & param,topo,neigh,nlist,efield,solvation,update,version,accuracy,printunit)
+        & param,topo,neigh,nlist,efield,solvation,update,version,accuracy,printunit,do_eda)
     !***********************************************************************
     !* Compute GFN-FF energy and analytical gradient.
     !* Input:
@@ -134,11 +156,12 @@ contains  !> MODULE PROCEDURES START HERE
     real(wp),intent(in) :: accuracy
     integer,intent(in) :: printlevel  !< verbosity (0=silent,1=timing,2=info,3=verbose)
     integer,intent(in),optional :: printunit  !< output unit (default: stdout)
+    logical,intent(in),optional :: do_eda !< compute molecular interfragment EDA matrices
 
     real(wp),intent(out) :: sigma(3,3) ! stress tensor
     real(wp),intent(out) :: g(3,n)
     real(wp),intent(out) :: etot
-    logical :: pr
+    logical :: pr,leda
     integer :: myunit
     logical:: exitRun
 
@@ -175,6 +198,8 @@ contains  !> MODULE PROCEDURES START HERE
     logical,allocatable :: considered_ABH(:,:,:)
     real(wp) :: mcf_ees,mcf_ehb,mcf_nrep,mcf_s8
     pr = printlevel >= 2
+    leda = .false.
+    if (present(do_eda)) leda = do_eda .and. cell%npbc == 0
     if (present(printunit)) then
       myunit = printunit
     else
@@ -228,6 +253,21 @@ contains  !> MODULE PROCEDURES START HERE
     sigma(:,:) = 0.0_wp
     etot    = 0.0_wp
 !&>
+
+    res_gff%eda%nfrag = 0
+    if (leda .and. topo%nfrag > 1) then
+      res_gff%eda%nfrag = topo%nfrag
+      allocate (res_gff%eda%electrostatic(topo%nfrag,topo%nfrag),source=0.0_wp)
+      allocate (res_gff%eda%repulsion(topo%nfrag,topo%nfrag),source=0.0_wp)
+      allocate (res_gff%eda%dispersion(topo%nfrag,topo%nfrag),source=0.0_wp)
+      allocate (res_gff%eda%hydrogen_bond(topo%nfrag,topo%nfrag),source=0.0_wp)
+      allocate (res_gff%eda%halogen_bond(topo%nfrag,topo%nfrag),source=0.0_wp)
+      allocate (res_gff%eda%atom_electrostatic(n),source=0.0_wp)
+      allocate (res_gff%eda%atom_repulsion(n),source=0.0_wp)
+      allocate (res_gff%eda%atom_dispersion(n),source=0.0_wp)
+      allocate (res_gff%eda%atom_hydrogen_bond(n),source=0.0_wp)
+      allocate (res_gff%eda%atom_halogen_bond(n),source=0.0_wp)
+    end if
 
     allocate (sqrab(n*(n+1)/2),srab(n*(n+1)/2),qtmp(n),g5tmp(3,n), &
     &         eeqtmp(2,n*(n+1)/2),d3list(2,n*(n+1)/2),dcn(3,n,n),cn(n), &
@@ -306,6 +346,12 @@ contains  !> MODULE PROCEDURES START HERE
     if (update.or.require_update) then
       call gfnff_hbset(n,at,xyz,topo,neigh,nlist,hbthr1,hbthr2)
     end if
+
+    if (leda) then
+      if (allocated(nlist%hbe1)) nlist%hbe1 = 0.0_wp
+      if (allocated(nlist%hbe2)) nlist%hbe2 = 0.0_wp
+      if (allocated(nlist%hbe3)) nlist%hbe3 = 0.0_wp
+    end if
     if (pr) call timer%measure(10)
 
     !------------!
@@ -368,6 +414,10 @@ contains  !> MODULE PROCEDURES START HERE
       end do
     end do
     !$omp end parallel do
+    if (leda .and. topo%nfrag > 1) then
+      call eda_nonbonded_repulsion(n,at,xyz,repthr,topo,param,neigh,mcf_nrep, &
+      &                            res_gff%eda%repulsion,res_gff%eda%atom_repulsion)
+    end if
     if (pr) call timer%measure(2)
 
     ! just a extremely crude mode for 2D-3D conversion !
@@ -420,6 +470,10 @@ contains  !> MODULE PROCEDURES START HERE
       if (pr) call timer%measure(4,'EEQ energy and q')
       call goed_gfnff(accuracy .gt. 1,n,at,sqrab,srab,&         ! modified version
       &                dfloat(ichrg),eeqtmp,cn,nlist%q,ees,solvation,param,topo)  ! without dq/dr
+      if (leda .and. topo%nfrag > 1) then
+        call eda_electrostatic(n,srab,eeqtmp,nlist%q,topo%fraglist, &
+        &                      res_gff%eda%electrostatic,res_gff%eda%atom_electrostatic)
+      end if
       if (pr) call timer%measure(4)
     else
       if (pr) call timer%measure(4,'EEQ energy and q')
@@ -437,8 +491,14 @@ contains  !> MODULE PROCEDURES START HERE
     if (cell%npbc .eq. 0) then
       if (pr) call timer%measure(5,'D3')
       if (nd3 .gt. 0) then
-        call d3_gradient(topo%dispm,n,at,xyz,nd3,d3list,topo%zetac6, &
-        & param%d3r0,sqrtZr4r2,4.0d0,param%dispscale,cn,dcn,edisp,g)
+        if (leda .and. topo%nfrag > 1) then
+          call d3_gradient(topo%dispm,n,at,xyz,nd3,d3list,topo%zetac6, &
+          & param%d3r0,sqrtZr4r2,4.0d0,param%dispscale,cn,dcn,edisp,g, &
+          & topo%fraglist,res_gff%eda%dispersion,res_gff%eda%atom_dispersion)
+        else
+          call d3_gradient(topo%dispm,n,at,xyz,nd3,d3list,topo%zetac6, &
+          & param%d3r0,sqrtZr4r2,4.0d0,param%dispscale,cn,dcn,edisp,g)
+        end if
       end if
       deallocate (d3list)
       if (pr) call timer%measure(5)
@@ -728,7 +788,7 @@ contains  !> MODULE PROCEDURES START HERE
 
     if (nlist%nhb1 .gt. 0) then
       !$omp parallel do default(none) reduction(+:ehb, g, sigma) &
-      !$omp shared(topo,nlist, neigh, param, n, at, xyz, sqrab, srab, mcf_ehb) &
+      !$omp shared(topo,nlist, neigh, param, n, at, xyz, sqrab, srab, mcf_ehb, leda) &
       !$omp private(i, j, k, l, iTri, iTrj, etmp, g3tmp)
       do i = 1,nlist%nhb1
         j = nlist%hblist1(1,i)
@@ -743,6 +803,7 @@ contains  !> MODULE PROCEDURES START HERE
         g(1:3,k) = g(1:3,k)+g3tmp(1:3,2)*mcf_ehb
         g(1:3,l) = g(1:3,l)+g3tmp(1:3,3)*mcf_ehb
         ehb = ehb+etmp*mcf_ehb
+        if (leda) nlist%hbe1(i) = etmp
       end do
       !$omp end parallel do
     end if
@@ -836,6 +897,13 @@ contains  !> MODULE PROCEDURES START HERE
       end do
       !$omp end parallel do
     end if
+
+    if (leda .and. topo%nfrag > 1) then
+      call eda_hydrogen_bond(nlist,topo%fraglist,mcf_ehb,res_gff%eda%hydrogen_bond, &
+      &                      res_gff%eda%atom_hydrogen_bond)
+      call eda_halogen_bond(nlist,topo%fraglist,res_gff%eda%halogen_bond, &
+      &                     res_gff%eda%atom_halogen_bond)
+    end if
     if (pr) call timer%measure(10)
 
     ! external stuff !
@@ -924,6 +992,192 @@ contains  !> MODULE PROCEDURES START HERE
     call gemv(xyz,nlist%q,res_gff%dipole)
 
   end subroutine gfnff_eg
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  subroutine add_eda_pair(matrix,frag_i,frag_j,value)
+    real(wp),intent(inout) :: matrix(:,:)
+    integer,intent(in) :: frag_i,frag_j
+    real(wp),intent(in) :: value
+    integer :: first,second
+
+    if (frag_i == frag_j) return
+    first = min(frag_i,frag_j)
+    second = max(frag_i,frag_j)
+    if (first < 1 .or. second > size(matrix,1)) return
+    matrix(first,second) = matrix(first,second)+value
+  end subroutine add_eda_pair
+
+  subroutine add_eda_atomic_pair(atom_energy,atom_i,atom_j,value)
+    !> Multiwfn EDA-FF convention: each pair contribution is divided equally
+    !> between the two atoms, so sum(atom_energy) recovers the pair-energy sum.
+    real(wp),intent(inout) :: atom_energy(:)
+    integer,intent(in) :: atom_i,atom_j
+    real(wp),intent(in) :: value
+
+    if (atom_i < 1 .or. atom_i > size(atom_energy)) return
+    if (atom_j < 1 .or. atom_j > size(atom_energy)) return
+    atom_energy(atom_i) = atom_energy(atom_i)+0.5_wp*value
+    atom_energy(atom_j) = atom_energy(atom_j)+0.5_wp*value
+  end subroutine add_eda_atomic_pair
+
+  subroutine add_eda_multicenter(matrix,atom_energy,fragment,atom,value)
+    !> Assign a many-center term to the unique fragment pairs that it spans.
+    !> Two-fragment terms are assigned in full; three-fragment terms are split
+    !> equally over the three pairs so that the matrix sum is energy conserving.
+    real(wp),intent(inout) :: matrix(:,:)
+    real(wp),intent(inout) :: atom_energy(:)
+    integer,intent(in) :: fragment(:)
+    integer,intent(in) :: atom(:)
+    real(wp),intent(in) :: value
+    integer :: unique(size(fragment)),unique_atom(size(atom)),nunique,natom,i,j
+    real(wp) :: share
+
+    nunique = 0
+    unique = 0
+    do i = 1,size(fragment)
+      if (fragment(i) < 1 .or. fragment(i) > size(matrix,1)) cycle
+      if (nunique > 0) then
+        if (any(unique(1:nunique) == fragment(i))) cycle
+      end if
+      nunique = nunique+1
+      unique(nunique) = fragment(i)
+    end do
+
+    if (nunique < 2) return
+    share = value/real(nunique*(nunique-1)/2,wp)
+    do i = 1,nunique-1
+      do j = i+1,nunique
+        call add_eda_pair(matrix,unique(i),unique(j),share)
+      end do
+    end do
+
+    ! Literal extension of the Multiwfn pair convention to a native GFN-FF
+    ! three-center term: give every unique participating atom an equal share.
+    natom = 0
+    unique_atom = 0
+    do i = 1,size(atom)
+      if (atom(i) < 1 .or. atom(i) > size(atom_energy)) cycle
+      if (natom > 0) then
+        if (any(unique_atom(1:natom) == atom(i))) cycle
+      end if
+      natom = natom+1
+      unique_atom(natom) = atom(i)
+    end do
+    if (natom < 1) return
+    share = value/real(natom,wp)
+    do i = 1,natom
+      atom_energy(unique_atom(i)) = atom_energy(unique_atom(i))+share
+    end do
+  end subroutine add_eda_multicenter
+
+  subroutine eda_hydrogen_bond(nlist,fraglist,scale,energy,atom_energy)
+    type(TGFFNeighbourList),intent(in) :: nlist
+    integer,intent(in) :: fraglist(:)
+    real(wp),intent(in) :: scale
+    real(wp),intent(inout) :: energy(:,:)
+    real(wp),intent(inout) :: atom_energy(:)
+    integer :: i,a,b,h
+
+    if (allocated(nlist%hbe1)) then
+      do i = 1,min(nlist%nhb1,size(nlist%hbe1))
+        a = nlist%hblist1(1,i)
+        b = nlist%hblist1(2,i)
+        h = nlist%hblist1(3,i)
+        if (min(a,b,h) < 1 .or. max(a,b,h) > size(fraglist)) cycle
+        call add_eda_multicenter(energy,atom_energy, &
+        & [fraglist(a),fraglist(b),fraglist(h)],[a,b,h],nlist%hbe1(i)*scale)
+      end do
+    end if
+
+    if (allocated(nlist%hbe2)) then
+      do i = 1,min(nlist%nhb2,size(nlist%hbe2))
+        a = nlist%hblist2(1,i)
+        b = nlist%hblist2(2,i)
+        h = nlist%hblist2(3,i)
+        if (min(a,b,h) < 1 .or. max(a,b,h) > size(fraglist)) cycle
+        call add_eda_multicenter(energy,atom_energy, &
+        & [fraglist(a),fraglist(b),fraglist(h)],[a,b,h],nlist%hbe2(i)*scale)
+      end do
+    end if
+  end subroutine eda_hydrogen_bond
+
+  subroutine eda_halogen_bond(nlist,fraglist,energy,atom_energy)
+    type(TGFFNeighbourList),intent(in) :: nlist
+    integer,intent(in) :: fraglist(:)
+    real(wp),intent(inout) :: energy(:,:)
+    real(wp),intent(inout) :: atom_energy(:)
+    integer :: i,a,b,x
+
+    if (.not.allocated(nlist%hbe3)) return
+    do i = 1,min(nlist%nxb,size(nlist%hbe3))
+      a = nlist%hblist3(1,i)
+      b = nlist%hblist3(2,i)
+      x = nlist%hblist3(3,i)
+      if (min(a,b,x) < 1 .or. max(a,b,x) > size(fraglist)) cycle
+      call add_eda_multicenter(energy,atom_energy, &
+      & [fraglist(a),fraglist(b),fraglist(x)],[a,b,x],nlist%hbe3(i))
+    end do
+  end subroutine eda_halogen_bond
+
+  subroutine eda_nonbonded_repulsion(n,at,xyz,repthr,topo,param,neigh,mcf_nrep,energy,atom_energy)
+    integer,intent(in) :: n,at(n)
+    real(wp),intent(in) :: xyz(3,n),repthr,mcf_nrep
+    type(TGFFTopology),intent(in) :: topo
+    type(TGFFData),intent(in) :: param
+    type(TNeigh),intent(in) :: neigh
+    real(wp),intent(inout) :: energy(:,:)
+    real(wp),intent(inout) :: atom_energy(:)
+
+    integer :: iat,jat,iTr,iTrDum,ati,atj
+    real(wp) :: r2,rab,t16,t8,t26
+
+    do iat = 1,n
+      do jat = 1,iat
+        if (topo%fraglist(iat) == topo%fraglist(jat)) cycle
+        do iTr = 1,neigh%nTrans
+          r2 = norm2(xyz(:,iat)-xyz(:,jat)+neigh%transVec(:,iTr))**2
+          if (r2 > repthr .or. r2 < 1.0e-8_wp) cycle
+          if (iTr <= neigh%numctr) then
+            if (neigh%bpair(iat,jat,iTr) == 1) cycle
+          end if
+          ati = at(iat)
+          atj = at(jat)
+          rab = sqrt(r2)
+          t16 = r2**0.75_wp
+          if (iTr > neigh%numctr) then
+            iTrDum = neigh%numctr+1
+          else
+            iTrDum = iTr
+          end if
+          t8 = t16*topo%alphanb(iat,jat,iTrDum)
+          t26 = exp(-t8)*param%repz(ati)*param%repz(atj)*param%repscaln*mcf_nrep
+          call add_eda_pair(energy,topo%fraglist(iat),topo%fraglist(jat),t26/rab)
+          call add_eda_atomic_pair(atom_energy,iat,jat,t26/rab)
+        end do
+      end do
+    end do
+  end subroutine eda_nonbonded_repulsion
+
+  subroutine eda_electrostatic(n,r,eeqtmp,q,fraglist,energy,atom_energy)
+    integer,intent(in) :: n,fraglist(n)
+    real(wp),intent(in) :: r(n*(n+1)/2),eeqtmp(2,n*(n+1)/2),q(n)
+    real(wp),intent(inout) :: energy(:,:)
+    real(wp),intent(inout) :: atom_energy(:)
+    integer :: i,j,ij,ii
+    real(wp) :: pair_energy
+
+    do i = 1,n
+      ii = i*(i-1)/2
+      do j = 1,i-1
+        if (fraglist(i) == fraglist(j)) cycle
+        ij = ii+j
+        pair_energy = q(i)*q(j)*eeqtmp(2,ij)/r(ij)
+        call add_eda_pair(energy,fraglist(i),fraglist(j),pair_energy)
+        call add_eda_atomic_pair(atom_energy,i,j,pair_energy)
+      end do
+    end do
+  end subroutine eda_electrostatic
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 

@@ -306,7 +306,7 @@ contains  !> MODULE PROCEDURES START HERE
 !========================================================================================!
 
   subroutine d3_gradient(dispm,nat,at,xyz,npair,pairlist,zeta_scale,radii, &
-        & r4r2,weighting_factor,dispscale,cn,dcndr,energy,gradient)
+        & r4r2,weighting_factor,dispscale,cn,dcndr,energy,gradient,fraglist,eda_energy,eda_atom_energy)
     use disp_dftd3param
     type(TDispersionData),intent(in) :: dispm
     integer,intent(in) :: nat
@@ -325,12 +325,15 @@ contains  !> MODULE PROCEDURES START HERE
 
     real(wp),intent(inout) :: energy
     real(wp),intent(inout) :: gradient(:,:)
+    integer,intent(in),optional :: fraglist(:)
+    real(wp),intent(inout),optional :: eda_energy(:,:)
+    real(wp),intent(inout),optional :: eda_atom_energy(:)
     real(wp) :: sigma(3,3)
 
     integer :: max_ref
-    integer :: iat,jat,ati,atj,ij,img
+    integer :: iat,jat,ati,atj,ij,img,frag_i,frag_j
     real(wp) :: r4r2ij,r0,rij(3),r2,t6,t8,t10,d6,d8,d10
-    real(wp) :: dE,dG(3),dS(3,3),disp,ddisp
+    real(wp) :: dE,dG(3),dS(3,3),disp,ddisp,pair_energy
 
     real(wp),allocatable :: gw(:,:),dgwdcn(:,:)
     real(wp),allocatable :: c6(:,:),dc6dcn(:,:)
@@ -396,6 +399,40 @@ contains  !> MODULE PROCEDURES START HERE
     !call dgemv('n', 9, nat, 1.0_wp, dcndL, 9, dEdcn, 1, 1.0_wp, sigma, 1)
 
     energy = sum(energies)
+
+    ! Optional interfragment dispersion decomposition. Re-evaluate only the
+    ! scalar pair expression so the original threaded energy/gradient path is
+    ! untouched. The unique non-periodic pair list contains iat /= jat.
+    if (present(fraglist) .and. present(eda_energy)) then
+      do img = 1,npair
+        iat = pairlist(1,img)
+        jat = pairlist(2,img)
+        if (fraglist(iat) == fraglist(jat)) cycle
+        ij = jat+iat*(iat-1)/2
+        ati = at(iat)
+        atj = at(jat)
+        rij = xyz(:,iat)-xyz(:,jat)
+        r2 = sum(rij**2)
+        r4r2ij = 3*r4r2(ati)*r4r2(atj)
+        r0 = radii(lin(ati,atj))
+        t6 = 1._wp/(r2**3+r0**3)
+        t8 = 1._wp/(r2**4+r0**4)
+        disp = (t6+2*r4r2ij*t8)*zeta_scale(ij)*dispscale
+        frag_i = min(fraglist(iat),fraglist(jat))
+        frag_j = max(fraglist(iat),fraglist(jat))
+        pair_energy = -c6(iat,jat)*disp
+        if (frag_i >= 1 .and. frag_j <= size(eda_energy,1)) then
+          eda_energy(frag_i,frag_j) = eda_energy(frag_i,frag_j)+pair_energy
+          if (present(eda_atom_energy)) then
+            if (iat >= 1 .and. iat <= size(eda_atom_energy) .and. &
+            &   jat >= 1 .and. jat <= size(eda_atom_energy)) then
+              eda_atom_energy(iat) = eda_atom_energy(iat)+0.5_wp*pair_energy
+              eda_atom_energy(jat) = eda_atom_energy(jat)+0.5_wp*pair_energy
+            end if
+          end if
+        end if
+      end do
+    end if
 
   end subroutine d3_gradient
 

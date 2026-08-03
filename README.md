@@ -95,6 +95,29 @@ and can be linked into any downstream project.
 
 ---
 
+## EDA-GFNFF command-line program
+
+Building with the standalone applications enabled also creates `eda-gfnff`, a
+Fortran CLI for direct interfragment decomposition into EEQ pair electrostatics,
+nonbonded repulsion, dispersion, and the native GFN-FF hydrogen-bond and halogen-bond
+corrections. It reads fragment-aware XYZ files or Gaussian GJF/COM Cartesian inputs,
+prints Multiwfn-style per-atom contributions, and writes those contributions to an
+extended XYZ file.
+
+```bash
+cmake -S . -B _build -Dbuild_exe=ON
+cmake --build _build
+
+_build/eda-gfnff complex.xyz --frag-charges "0,0"
+_build/eda-gfnff complex.gjf
+_build/eda-gfnff complex.gjf -o complex_atomic_eda.extxyz
+```
+
+Input syntax, definitions, and examples are documented in
+[`docs/EDA-GFNFF.md`](docs/EDA-GFNFF.md).
+
+---
+
 ## Library usage
 
 The interface is exposed through the `gfnff_interface` Fortran module and the

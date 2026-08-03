@@ -58,6 +58,10 @@ module gfnff_data_types
     !> Lets the host feed e.g. CEH charges to assign the correct charge to each
     !> fragment instead of relying on GFN-FF's limited auto-detection.
     real(wp),allocatable :: refq(:)
+    !> Exact integer net charge for each user-defined fragment. When supplied
+    !> together with fraglist, this takes precedence over charge auto-detection
+    !> and over refq. Fragment labels must be contiguous and start at 1.
+    real(wp),allocatable :: fragcharges(:)
   end type TGFFUserInput
 
 ! ══════════════════════════════════════════════════════════════════════════════
