@@ -111,6 +111,7 @@ cmake --build _build
 _build/eda-gfnff complex.xyz --frag-charges "0,0"
 _build/eda-gfnff complex.gjf
 _build/eda-gfnff complex.gjf -o complex_atomic_eda.extxyz
+_build/eda-gfnff complex.gjf --unit kJ/mol -o complex_atomic_eda_kj.extxyz
 ```
 
 Input syntax, definitions, and examples are documented in

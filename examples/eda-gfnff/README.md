@@ -10,7 +10,8 @@ After building with `-Dbuild_exe=ON`:
 
 Each run writes `INPUT.eda.extxyz` by default. The file contains the fragment ID
 and the electrostatic, repulsion, dispersion, H-bond, X-bond, three-term, and total
-NCI atomic contributions in kcal/mol. Use `-o FILE` to change the output path.
+NCI atomic contributions in kcal/mol by default. Add `--unit kJ/mol` for kJ/mol.
+Use `-o FILE` to change the output path.
 
 Both inputs describe the same geometry, fragment partition, and neutral fragment
 charges, and therefore produce the same EDA-GFNFF values.

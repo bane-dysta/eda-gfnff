@@ -129,10 +129,11 @@ approach, included with permission from the banelib author.
 ## Output
 
 For every fragment pair the CLI prints electrostatic, nonbonded repulsion, dispersion,
-GFN-FF hydrogen-bond correction, GFN-FF halogen-bond correction, and their total in
-kcal/mol. It also prints the three-term subtotal and the five-term all-pairs total in
-Hartree, kcal/mol, and kJ/mol. The full GFN-FF single-point energy and gradient norm are
-reported separately.
+GFN-FF hydrogen-bond correction, GFN-FF halogen-bond correction, and their total. The
+default unit is kcal/mol; use `--unit kJ/mol` to print the pair table and atomic
+contributions in kJ/mol. The five-term all-pairs total is also printed in Hartree,
+kcal/mol, and kJ/mol. The full GFN-FF single-point energy and gradient norm are reported
+separately.
 
 The CLI also prints Multiwfn-style atomic contributions. For every cross-fragment
 two-center electrostatic, repulsion, or dispersion interaction, one half of the pair
@@ -143,7 +144,8 @@ divided equally among the unique atoms participating in each correction.
 
 An extended XYZ file is written automatically. By default, the input suffix is replaced
 with `.eda.extxyz`; `-o` or `--output` selects another path. Coordinates are written in
-Angstrom and all atomic energy properties are written in kcal/mol. The properties are:
+Angstrom and all atomic energy properties use the selected output unit (kcal/mol by
+default, or kJ/mol with `--unit kJ/mol`). The properties are:
 
 ```text
 fragment
@@ -160,6 +162,7 @@ For example:
 
 ```bash
 eda-gfnff water_dimer.xyz --frag-charges 0,0 -o water_atomic_eda.extxyz
+eda-gfnff water_dimer.xyz --frag-charges 0,0 --unit kJ/mol -o water_atomic_eda_kj.extxyz
 ```
 
 The electrostatic entry is the cross-fragment pair part of the EEQ energy expression.

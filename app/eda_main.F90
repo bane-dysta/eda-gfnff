@@ -14,13 +14,17 @@ program eda_gfnff_cli
   type(eda_input_data) :: input
   type(gfnff_data) :: calculator
   character(len=4096) :: inputfile,fragment_spec,charge_spec,outputfile,arg,nextarg
+  character(len=8) :: energy_unit
   character(len=:),allocatable :: error_message
   real(wp),allocatable :: gradient(:,:)
-  real(wp) :: energy
+  real(wp),parameter :: eh_to_kcal=627.5094740631_wp
+  real(wp),parameter :: eh_to_kj=2625.4996394799_wp
+  real(wp) :: energy,energy_factor
   integer :: io,threads,printlevel,i,nargs,index_arg
   logical :: have_input,have_output
 
   inputfile=''; fragment_spec=''; charge_spec=''; outputfile=''
+  energy_unit='kcal/mol'; energy_factor=eh_to_kcal
   threads=1; printlevel=1; have_input=.false.; have_output=.false.
   nargs=command_argument_count()
   if (nargs==0) call print_help(0)
@@ -43,6 +47,9 @@ program eda_gfnff_cli
     case('-o','--output')
       call require_next(index_arg,nargs,nextarg,'missing value after --output')
       outputfile=trim(nextarg); have_output=.true.
+    case('--unit','--energy-unit')
+      call require_next(index_arg,nargs,nextarg,'missing value after --unit')
+      call parse_energy_unit(trim(nextarg),energy_unit,energy_factor)
     case('-T','--threads')
       call require_next(index_arg,nargs,nextarg,'missing value after --threads')
       read(nextarg,*,iostat=io) threads
@@ -112,27 +119,27 @@ program eda_gfnff_cli
   write(stdout,'(/,1x,a,1x,es22.14,1x,a)') 'GFN-FF total energy:',energy,'Eh'
   write(stdout,'(1x,a,1x,es22.14,1x,a)') 'GFN-FF gradient norm:',sqrt(sum(gradient**2)),'Eh/a0'
 
-  call print_eda(calculator,input%nfrag)
+  call print_eda(calculator,input%nfrag,energy_factor,trim(energy_unit))
   call validate_atomic_contributions(calculator,input%nfrag)
-  call print_atomic_contributions(calculator,input)
-  call write_extxyz(trim(outputfile),calculator,input,error_message)
+  call print_atomic_contributions(calculator,input,energy_factor,trim(energy_unit))
+  call write_extxyz(trim(outputfile),calculator,input,energy_factor,trim(energy_unit),error_message)
   if (len(error_message)>0) call fatal(error_message)
   write(stdout,'(/,1x,a,1x,a)') 'Atomic contributions written to:',trim(outputfile)
 
 contains
 
-  subroutine print_eda(calc,nfrag)
+  subroutine print_eda(calc,nfrag,unit_factor,unit_label)
     type(gfnff_data),intent(in) :: calc
     integer,intent(in) :: nfrag
-    real(wp),parameter :: eh_to_kcal=627.5094740631_wp
-    real(wp),parameter :: eh_to_kj=2625.4996394799_wp
+    real(wp),intent(in) :: unit_factor
+    character(len=*),intent(in) :: unit_label
     real(wp) :: eel,erep,edisp,ehb,exb,etotal
     real(wp) :: sum_el,sum_rep,sum_disp,sum_hb,sum_xb,sum_three,sum_total
     integer :: a,b
 
     sum_el=0.0_wp; sum_rep=0.0_wp; sum_disp=0.0_wp
     sum_hb=0.0_wp; sum_xb=0.0_wp
-    write(stdout,'(/,1x,a)') 'EDA-GFNFF interfragment decomposition (kcal/mol)'
+    write(stdout,'(/,1x,a,a,a)') 'EDA-GFNFF interfragment decomposition (',trim(unit_label),')'
     write(stdout,'(1x,a5,1x,a5,6(2x,a14))') 'FragA','FragB','Electrostatic','Repulsion', &
     & 'Dispersion','H-bond','X-bond','Total NCI'
     do a=1,nfrag-1
@@ -145,15 +152,15 @@ contains
         etotal=eel+erep+edisp+ehb+exb
         sum_el=sum_el+eel; sum_rep=sum_rep+erep; sum_disp=sum_disp+edisp
         sum_hb=sum_hb+ehb; sum_xb=sum_xb+exb
-        write(stdout,'(1x,i5,1x,i5,6(2x,f14.6))') a,b,eel*eh_to_kcal,erep*eh_to_kcal, &
-        & edisp*eh_to_kcal,ehb*eh_to_kcal,exb*eh_to_kcal,etotal*eh_to_kcal
+        write(stdout,'(1x,i5,1x,i5,6(2x,f14.6))') a,b,eel*unit_factor,erep*unit_factor, &
+        & edisp*unit_factor,ehb*unit_factor,exb*unit_factor,etotal*unit_factor
       end do
     end do
     sum_three=sum_el+sum_rep+sum_disp
     sum_total=sum_three+sum_hb+sum_xb
     write(stdout,'(1x,a)') repeat('-',108)
-    write(stdout,'(1x,a11,6(2x,f14.6))') 'All pairs',sum_el*eh_to_kcal,sum_rep*eh_to_kcal, &
-    & sum_disp*eh_to_kcal,sum_hb*eh_to_kcal,sum_xb*eh_to_kcal,sum_total*eh_to_kcal
+    write(stdout,'(1x,a11,6(2x,f14.6))') 'All pairs',sum_el*unit_factor,sum_rep*unit_factor, &
+    & sum_disp*unit_factor,sum_hb*unit_factor,sum_xb*unit_factor,sum_total*unit_factor
     write(stdout,'(/,1x,a)') 'Total interfragment EDA-GFNFF'
     write(stdout,'(1x,a,1x,es22.14,1x,a)') 'Electrostatic:',sum_el,'Eh'
     write(stdout,'(1x,a,1x,es22.14,1x,a)') 'Repulsion:    ',sum_rep,'Eh'
@@ -204,15 +211,16 @@ contains
     end if
   end subroutine check_atomic_term
 
-  subroutine print_atomic_contributions(calc,data)
+  subroutine print_atomic_contributions(calc,data,unit_factor,unit_label)
     type(gfnff_data),intent(in) :: calc
     type(eda_input_data),intent(in) :: data
-    real(wp),parameter :: eh_to_kcal=627.5094740631_wp
+    real(wp),intent(in) :: unit_factor
+    character(len=*),intent(in) :: unit_label
     real(wp) :: eel,erep,edisp,ehb,exb,three,total
     real(wp) :: sum_el,sum_rep,sum_disp,sum_hb,sum_xb,sum_three,sum_total
     integer :: i
 
-    write(stdout,'(/,1x,a)') 'Multiwfn-style atomic contributions (kcal/mol)'
+    write(stdout,'(/,1x,a,a,a)') 'Multiwfn-style atomic contributions (',trim(unit_label),')'
     write(stdout,'(1x,a6,1x,a4,1x,a5,7(2x,a13))') 'Atom','Elem','Frag','Electrostatic', &
     & 'Repulsion','Dispersion','H-bond','X-bond','Three-term','Total NCI'
     do i=1,data%nat
@@ -224,8 +232,8 @@ contains
       three=eel+erep+edisp
       total=three+ehb+exb
       write(stdout,'(1x,i6,1x,a4,1x,i5,7(2x,f13.6))') i,trim(atomic_symbol(data%at(i))), &
-      & data%fragment(i),eel*eh_to_kcal,erep*eh_to_kcal,edisp*eh_to_kcal, &
-      & ehb*eh_to_kcal,exb*eh_to_kcal,three*eh_to_kcal,total*eh_to_kcal
+      & data%fragment(i),eel*unit_factor,erep*unit_factor,edisp*unit_factor, &
+      & ehb*unit_factor,exb*unit_factor,three*unit_factor,total*unit_factor
     end do
 
     sum_el=sum(calc%res%eda%atom_electrostatic)
@@ -236,18 +244,19 @@ contains
     sum_three=sum_el+sum_rep+sum_disp
     sum_total=sum_three+sum_hb+sum_xb
     write(stdout,'(1x,a)') repeat('-',126)
-    write(stdout,'(1x,a17,7(2x,f13.6))') 'Atomic sum',sum_el*eh_to_kcal, &
-    & sum_rep*eh_to_kcal,sum_disp*eh_to_kcal,sum_hb*eh_to_kcal, &
-    & sum_xb*eh_to_kcal,sum_three*eh_to_kcal,sum_total*eh_to_kcal
+    write(stdout,'(1x,a17,7(2x,f13.6))') 'Atomic sum',sum_el*unit_factor, &
+    & sum_rep*unit_factor,sum_disp*unit_factor,sum_hb*unit_factor, &
+    & sum_xb*unit_factor,sum_three*unit_factor,sum_total*unit_factor
   end subroutine print_atomic_contributions
 
-  subroutine write_extxyz(filename,calc,data,error_message)
+  subroutine write_extxyz(filename,calc,data,unit_factor,unit_label,error_message)
     character(len=*),intent(in) :: filename
     type(gfnff_data),intent(in) :: calc
     type(eda_input_data),intent(in) :: data
+    real(wp),intent(in) :: unit_factor
+    character(len=*),intent(in) :: unit_label
     character(len=:),allocatable,intent(out) :: error_message
     real(wp),parameter :: bohr_to_angstrom=0.529177249_wp
-    real(wp),parameter :: eh_to_kcal=627.5094740631_wp
     real(wp) :: eel,erep,edisp,ehb,exb,three,total,total_nci
     integer :: unit,io,i
     character(len=64) :: total_text
@@ -262,23 +271,23 @@ contains
     total_nci=sum(calc%res%eda%atom_electrostatic)+sum(calc%res%eda%atom_repulsion)+ &
     & sum(calc%res%eda%atom_dispersion)+sum(calc%res%eda%atom_hydrogen_bond)+ &
     & sum(calc%res%eda%atom_halogen_bond)
-    write(total_text,'(es24.16)') total_nci*eh_to_kcal
+    write(total_text,'(es24.16)') total_nci*unit_factor
     write(unit,'(i0)') data%nat
     write(unit,'(a)') &
     & 'Properties=species:S:1:pos:R:3:fragment:I:1:eda_electrostatic:R:1:'// &
     & 'eda_repulsion:R:1:eda_dispersion:R:1:eda_hbond:R:1:eda_xbond:R:1:'// &
-    & 'eda_three_term:R:1:eda_total_nci:R:1 energy_unit="kcal/mol" '// &
+    & 'eda_three_term:R:1:eda_total_nci:R:1 energy_unit="'//trim(unit_label)//'" '// &
     & 'atomic_contribution="Multiwfn pair-halving convention; HB/XB equally split over centers" '// &
     & 'charge='//trim(integer_text(data%charge))//' multiplicity='//trim(integer_text(data%spin))// &
     & ' nfrag='//trim(integer_text(data%nfrag))//' total_nci='//trim(adjustl(total_text))// &
     & ' source="EDA-GFNFF 0.3"'
 
     do i=1,data%nat
-      eel=calc%res%eda%atom_electrostatic(i)*eh_to_kcal
-      erep=calc%res%eda%atom_repulsion(i)*eh_to_kcal
-      edisp=calc%res%eda%atom_dispersion(i)*eh_to_kcal
-      ehb=calc%res%eda%atom_hydrogen_bond(i)*eh_to_kcal
-      exb=calc%res%eda%atom_halogen_bond(i)*eh_to_kcal
+      eel=calc%res%eda%atom_electrostatic(i)*unit_factor
+      erep=calc%res%eda%atom_repulsion(i)*unit_factor
+      edisp=calc%res%eda%atom_dispersion(i)*unit_factor
+      ehb=calc%res%eda%atom_hydrogen_bond(i)*unit_factor
+      exb=calc%res%eda%atom_halogen_bond(i)*unit_factor
       three=eel+erep+edisp
       total=three+ehb+exb
       write(unit,'(a,3(1x,f18.10),1x,i0,7(1x,es20.12))') trim(atomic_symbol(data%at(i))), &
@@ -286,6 +295,37 @@ contains
     end do
     close(unit)
   end subroutine write_extxyz
+
+  subroutine parse_energy_unit(value,unit_label,unit_factor)
+    character(len=*),intent(in) :: value
+    character(len=*),intent(out) :: unit_label
+    real(wp),intent(out) :: unit_factor
+    character(len=len(value)) :: normalized
+
+    normalized=lowercase(adjustl(value))
+    select case(trim(normalized))
+    case('kcal/mol','kcal','kcalmol')
+      unit_label='kcal/mol'
+      unit_factor=eh_to_kcal
+    case('kj/mol','kj','kjmol')
+      unit_label='kJ/mol'
+      unit_factor=eh_to_kj
+    case default
+      call fatal('invalid energy unit: '//trim(value)//' (expected kcal/mol or kJ/mol)')
+    end select
+  end subroutine parse_energy_unit
+
+  pure function lowercase(value) result(lower)
+    character(len=*),intent(in) :: value
+    character(len=len(value)) :: lower
+    integer :: i,code
+
+    lower=value
+    do i=1,len(value)
+      code=iachar(value(i:i))
+      if (code>=iachar('A') .and. code<=iachar('Z')) lower(i:i)=achar(code+32)
+    end do
+  end function lowercase
 
   function default_extxyz_name(filename) result(output)
     character(len=*),intent(in) :: filename
@@ -352,6 +392,7 @@ contains
     write(stdout,'(a)') '  --frag LIST_OR_FILE'
     write(stdout,'(a)') '  --frag-charges LIST_OR_FILE'
     write(stdout,'(a)') '  -o, --output FILE       extxyz output (default: INPUT.eda.extxyz)'
+    write(stdout,'(a)') '  --unit UNIT             EDA output unit: kcal/mol (default) or kJ/mol'
     write(stdout,'(a)') '  -T, --threads N'
     write(stdout,'(a)') '  -v, --verbose'
     write(stdout,'(a)') '  -q, --quiet'
