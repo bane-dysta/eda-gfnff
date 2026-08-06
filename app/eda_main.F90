@@ -13,21 +13,27 @@ program eda_gfnff_cli
 
   type(eda_input_data) :: input
   type(gfnff_data) :: calculator
-  character(len=4096) :: inputfile,fragment_spec,charge_spec,outputfile,arg,nextarg
+  character(len=4096) :: inputfile,fragment_id_spec,charge_spec,outputfile,arg,nextarg
+  character(len=4096),allocatable :: fragment_specs(:)
   character(len=8) :: energy_unit
   character(len=:),allocatable :: error_message
+  integer,allocatable :: fragment_cli_charge(:)
+  logical,allocatable :: fragment_has_charge(:)
   real(wp),allocatable :: gradient(:,:)
   real(wp),parameter :: eh_to_kcal=627.5094740631_wp
   real(wp),parameter :: eh_to_kj=2625.4996394799_wp
   real(wp) :: energy,energy_factor
-  integer :: io,threads,printlevel,i,nargs,index_arg
+  integer :: io,threads,printlevel,i,nargs,index_arg,nfragment_specs,cli_charge
   logical :: have_input,have_output
 
-  inputfile=''; fragment_spec=''; charge_spec=''; outputfile=''
+  inputfile=''; fragment_id_spec=''; charge_spec=''; outputfile=''
   energy_unit='kcal/mol'; energy_factor=eh_to_kcal
-  threads=1; printlevel=1; have_input=.false.; have_output=.false.
+  threads=1; printlevel=1; have_input=.false.; have_output=.false.; nfragment_specs=0
   nargs=command_argument_count()
   if (nargs==0) call print_help(0)
+  allocate(fragment_specs(max(1,nargs)),fragment_cli_charge(max(1,nargs)), &
+  & fragment_has_charge(max(1,nargs)))
+  fragment_specs=''; fragment_cli_charge=0; fragment_has_charge=.false.
 
   index_arg=1
   do while(index_arg<=nargs)
@@ -38,9 +44,22 @@ program eda_gfnff_cli
     case('-i','--input')
       call require_next(index_arg,nargs,nextarg,'missing value after --input')
       inputfile=trim(nextarg); have_input=.true.
-    case('--frag','--fragments')
+    case('--frag')
       call require_next(index_arg,nargs,nextarg,'missing value after --frag')
-      fragment_spec=trim(nextarg)
+      nfragment_specs=nfragment_specs+1
+      fragment_specs(nfragment_specs)=trim(nextarg)
+      if (index_arg<nargs) then
+        call get_command_argument(index_arg+1,nextarg)
+        call parse_integer_argument(trim(nextarg),fragment_has_charge(nfragment_specs),cli_charge)
+        if (fragment_has_charge(nfragment_specs)) then
+          fragment_cli_charge(nfragment_specs)=cli_charge
+          index_arg=index_arg+1
+        end if
+      end if
+    case('--frag-ids','--fragment-ids','--fragments')
+      call require_next(index_arg,nargs,nextarg,'missing value after --frag-ids')
+      if (len_trim(fragment_id_spec)>0) call fatal('--frag-ids may be specified only once')
+      fragment_id_spec=trim(nextarg)
     case('--frag-charges','--fragment-charges')
       call require_next(index_arg,nargs,nextarg,'missing value after --frag-charges')
       charge_spec=trim(nextarg)
@@ -71,7 +90,12 @@ program eda_gfnff_cli
   end do
 
   if (.not.have_input) call fatal('no input file specified')
-  call read_eda_input(trim(inputfile),trim(fragment_spec),trim(charge_spec),input,error_message)
+  if (nfragment_specs>0 .and. len_trim(fragment_id_spec)>0) then
+    call fatal('--frag cannot be combined with --frag-ids')
+  end if
+  call read_eda_input(trim(inputfile),fragment_specs(:nfragment_specs), &
+  & fragment_has_charge(:nfragment_specs),fragment_cli_charge(:nfragment_specs), &
+  & trim(fragment_id_spec),trim(charge_spec),input,error_message)
   if (len(error_message)>0) call fatal(error_message)
   if (.not.have_output) outputfile=default_extxyz_name(trim(inputfile))
   if (trim(outputfile)==trim(inputfile)) call fatal('extxyz output must differ from the input file')
@@ -111,9 +135,10 @@ program eda_gfnff_cli
   write(stdout,'(1x,a,i0)') 'Multiplicity: ',input%spin
   write(stdout,'(1x,a,i0)') 'Fragments: ',input%nfrag
   write(stdout,'(/,1x,a)') 'Fragment definition'
-  write(stdout,'(1x,a6,2x,a8,2x,a8)') 'Frag','Atoms','Charge'
+  write(stdout,'(1x,a6,2x,a20,2x,a8,2x,a8)') 'Frag','Name','Atoms','Charge'
   do i=1,input%nfrag
-    write(stdout,'(1x,i6,2x,i8,2x,i8)') i,count(input%fragment==i),input%fragment_charge(i)
+    write(stdout,'(1x,i6,2x,a20,2x,i8,2x,i8)') i,trim(input%fragment_name(i)), &
+    & count(input%fragment==i),input%fragment_charge(i)
   end do
 
   write(stdout,'(/,1x,a,1x,es22.14,1x,a)') 'GFN-FF total energy:',energy,'Eh'
@@ -357,6 +382,25 @@ contains
     call get_command_argument(position,value)
   end subroutine require_next
 
+  subroutine parse_integer_argument(text,found,value)
+    character(len=*),intent(in) :: text
+    logical,intent(out) :: found
+    integer,intent(out) :: value
+    integer :: i,first,io,last
+
+    found=.false.; value=0
+    last=len_trim(text)
+    if (last==0) return
+    first=1
+    if (text(1:1)=='+' .or. text(1:1)=='-') first=2
+    if (first>last) return
+    do i=first,last
+      if (text(i:i)<'0' .or. text(i:i)>'9') return
+    end do
+    read(text(:last),*,iostat=io) value
+    found=io==0
+  end subroutine parse_integer_argument
+
   subroutine fatal(message)
     character(len=*),intent(in) :: message
     write(stderr,'(a)') 'eda-gfnff: '//trim(message)
@@ -372,24 +416,30 @@ contains
   subroutine print_help(status)
     integer,intent(in) :: status
     write(stdout,'(a)') 'Usage:'
-    write(stdout,'(a)') '  eda-gfnff complex.xyz --frag FRAGMENTS --frag-charges CHARGES [options]'
+    write(stdout,'(a)') '  eda-gfnff structure --frag [name=]1-12,15 [charge] --frag ... [options]'
     write(stdout,'(a)') '  eda-gfnff complex.gjf [options]'
     write(stdout,'(a)') '  eda-gfnff complex.com [options]'
     write(stdout,'(a)') ''
-    write(stdout,'(a)') 'XYZ input:'
+    write(stdout,'(a)') 'Explicit fragments (baneda-compatible):'
+    write(stdout,'(a)') '  Repeat --frag once per fragment. Atom indices are 1-based; ranges are inclusive.'
+    write(stdout,'(a)') '  An integer charge may follow each --frag. Otherwise use --frag-charges.'
+    write(stdout,'(a)') '  Example: eda-gfnff dimer.xyz --frag water1=1-3 0 --frag water2=4-6 0'
+    write(stdout,'(a)') ''
+    write(stdout,'(a)') 'Embedded fragments:'
     write(stdout,'(a)') '  Comment line: "0 1", "charge=-1", optionally spin=2/multiplicity=2.'
-    write(stdout,'(a)') '  Fragment ids: atom-line column 5, or --frag with a list/file.'
+    write(stdout,'(a)') '  XYZ fragment ids may be stored in atom-line column 5.'
     write(stdout,'(a)') '  Fragment charges: --frag-charges with a list/file in ascending fragment-id order.'
-    write(stdout,'(a)') '  Example: eda-gfnff dimer.xyz --frag "1,1,1,2,2" --frag-charges "0,0"'
+    write(stdout,'(a)') '  Legacy per-atom id arrays use --frag-ids LIST_OR_FILE.'
     write(stdout,'(a)') ''
     write(stdout,'(a)') 'Gaussian input:'
-    write(stdout,'(a)') '  Cartesian atoms must use Element(Fragment=N). The charge line must contain'
-    write(stdout,'(a)') '  total charge/spin followed by one charge/spin pair per fragment, e.g.'
+    write(stdout,'(a)') '  Without CLI fragments, atoms must use Element(Fragment=N), and the charge line'
+    write(stdout,'(a)') '  contains total charge/spin followed by one charge/spin pair per fragment, e.g.'
     write(stdout,'(a)') '  0 1  0 1  0 1'
     write(stdout,'(a)') ''
     write(stdout,'(a)') 'Options:'
     write(stdout,'(a)') '  -i, --input FILE'
-    write(stdout,'(a)') '  --frag LIST_OR_FILE'
+    write(stdout,'(a)') '  --frag [name=]SELECTION [charge]   repeatable explicit fragment definition'
+    write(stdout,'(a)') '  --frag-ids LIST_OR_FILE            legacy one-fragment-id-per-atom mapping'
     write(stdout,'(a)') '  --frag-charges LIST_OR_FILE'
     write(stdout,'(a)') '  -o, --output FILE       extxyz output (default: INPUT.eda.extxyz)'
     write(stdout,'(a)') '  --unit UNIT             EDA output unit: kcal/mol (default) or kJ/mol'

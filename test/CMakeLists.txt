@@ -107,3 +107,19 @@ target_link_libraries(
 
 add_test("${PROJECT_NAME}/${cpptest}" "${PROJECT_NAME}-cpp-tester")
 
+###########################################################################
+# EDA command-line interface
+###########################################################################
+
+if(TARGET "${PROJECT_NAME}-eda-exe")
+  add_test(
+    NAME "${PROJECT_NAME}/eda-frag-cli"
+    COMMAND "${CMAKE_COMMAND}"
+      -DEDA_EXECUTABLE=$<TARGET_FILE:${PROJECT_NAME}-eda-exe>
+      -DXYZ_INPUT=${PROJECT_SOURCE_DIR}/app/testdata/eda_water_plain.xyz
+      -DGJF_INPUT=${PROJECT_SOURCE_DIR}/app/testdata/eda_water_plain.gjf
+      -DTEST_WORKDIR=${CMAKE_CURRENT_BINARY_DIR}/eda-frag-cli
+      -P ${PROJECT_SOURCE_DIR}/app/tests/verify_eda_frag_cli.cmake
+  )
+endif()
+
